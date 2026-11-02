@@ -1,5 +1,5 @@
 {
-  "name": "app-builder-workspace",
+  "name": "luopian",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -16,7 +16,7 @@
     "preview:stop": "node scripts/preview.mjs stop",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/preview-path-prefix.test.ts",
+    "test": "status=0; node --test 'scripts/**/*.test.mjs' || status=1; node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/preview-path-prefix.test.ts 'src/lib/video/*.test.ts' || status=1; exit $status",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
@@ -75,7 +75,6 @@
     "typescript": "^5.7.0",
     "vaul": "^1.1.2",
     "vite": "^8.2.0",
-    "youtubei.js": "^18.3.0",
     "zod": "^4.4.0",
     "zustand": "^5.0.0"
   },

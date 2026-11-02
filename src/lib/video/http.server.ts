@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
 
-import { VideoError } from "@/lib/video/errors";
+import { VideoError } from "./errors.ts";
 
 const block = new BlockList();
 block.addSubnet("0.0.0.0", 8, "ipv4");
@@ -53,7 +53,7 @@ function hostLooksLocal(hostname: string): boolean {
   return false;
 }
 
-export async function assertPublicHttpUrl(raw: string): Promise<URL> {
+function parsePublicHttpUrl(raw: string): URL {
   let url: URL;
   try {
     url = new URL(raw);
@@ -65,21 +65,43 @@ export async function assertPublicHttpUrl(raw: string): Promise<URL> {
   }
   if (url.username || url.password) throw new VideoError("链接里不能带账号密码");
   if (hostLooksLocal(url.hostname)) throw new VideoError("不能访问内网地址");
-  const literal = isIP(url.hostname);
-  if (literal) {
+  return url;
+}
+
+/**
+ * Same policy as `assertPublicHttpUrl`, with DNS answers supplied by the caller.
+ * Literal IP hosts ignore `addresses`. Non-literal hosts are rejected when any
+ * answer is missing or blocked. Production always passes the real lookup result.
+ */
+export function assertResolvedPublicHttpUrl(raw: string, addresses: readonly string[]): URL {
+  const url = parsePublicHttpUrl(raw);
+  if (isIP(url.hostname)) {
     if (ipIsBlocked(url.hostname)) throw new VideoError("不能访问内网地址");
     return url;
   }
+  if (addresses.length === 0 || addresses.some((address) => ipIsBlocked(address))) {
+    throw new VideoError("不能访问内网地址");
+  }
+  return url;
+}
+
+export async function assertPublicHttpUrl(raw: string): Promise<URL> {
+  const url = parsePublicHttpUrl(raw);
+  // Node keeps brackets on IPv6 hostname (`[::1]`), so isIP() misses them.
+  // Those URLs fall through to DNS and fail closed. Do not strip the brackets
+  // without also blocking IPv4-mapped forms like `::ffff:7f00:1`: ipIsBlocked
+  // only special-cases the dotted spelling `::ffff:127.0.0.1`.
+  if (isIP(url.hostname)) return assertResolvedPublicHttpUrl(raw, []);
   let records: { address: string }[];
   try {
     records = await lookup(url.hostname, { all: true, verbatim: true });
   } catch {
     throw new VideoError("无法解析这个链接的地址");
   }
-  if (records.length === 0 || records.some((record) => ipIsBlocked(record.address))) {
-    throw new VideoError("不能访问内网地址");
-  }
-  return url;
+  return assertResolvedPublicHttpUrl(
+    raw,
+    records.map((record) => record.address),
+  );
 }
 
 export async function safeFetch(raw: string, init: RequestInit = {}): Promise<Response> {

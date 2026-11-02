@@ -1,7 +1,10 @@
 node_modules
 .vercel
 .tanstack
-.grok
+.grok/*
+!.grok/app-env.json
+!.grok/skills/
+!.grok/skills/**
 artifacts
 screenshots
 dist
@@ -12,3 +15,4 @@ dist
 .project_id
 .node_modules.lock
 AGENTS.md
+!AGENTS.md

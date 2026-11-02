@@ -11,7 +11,7 @@ export const Route = createRootRoute({
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: APP_NAME },
-      { name: "description", content: "贴上哔哩哔哩视频详情页链接，直接保存视频文件。" },
+      { name: "description", content: "贴上哔哩哔哩视频详情页链接，确认后保存视频文件。" },
       { name: "theme-color", content: "#f3efe6" },
     ],
     links: [

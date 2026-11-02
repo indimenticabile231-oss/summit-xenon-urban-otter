@@ -3,7 +3,14 @@ import { Download, Film, LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { withPreviewPrefix } from "@/lib/api-url";
-import { fileStem, formatBytes, formatDuration, type InspectResult, type VideoFormat } from "@/lib/video/format";
+import {
+  fileStem,
+  formatBytes,
+  formatDuration,
+  urlWithPart,
+  type InspectResult,
+  type VideoFormat,
+} from "@/lib/video/format";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -18,8 +25,8 @@ type HistoryItem = {
 
 const STEPS = [
   { name: "复制链接", detail: "哔哩哔哩详情页，或 b23 短链" },
-  { name: "粘贴解析", detail: "读出标题和能保存的清晰度" },
-  { name: "保存文件", detail: "解析完直接下载，也可以换清晰度" },
+  { name: "粘贴解析", detail: "读出标题、分P和能保存的清晰度" },
+  { name: "确认保存", detail: "选好分P和清晰度后再下载" },
 ];
 
 function Home() {
@@ -71,14 +78,9 @@ function Home() {
         setError(data.error || "这个页面没有解析出视频文件");
         return;
       }
-      setResult(data);
+      setResult({ ...data, parts: data.parts ?? [], page: data.page ?? 1 });
       setPhase("ready");
       remember({ url: data.pageUrl || trimmed, title: data.title, source: data.source, at: Date.now() });
-      const best = data.formats.find((item) => item.hasVideo && item.hasAudio) ?? data.formats[0];
-      if (best) {
-        setStartedId(best.id);
-        triggerDownload(data.pageUrl, best.id);
-      }
     } catch {
       setPhase("error");
       setResult(null);
@@ -95,7 +97,7 @@ function Home() {
             把哔哩哔哩详情页，存成视频文件
           </h1>
           <p className="mt-4 max-w-xl text-base leading-relaxed text-pretty text-muted">
-            粘贴 BV 链接或 b23 短链。解析成功后会直接开始下载，也可以换一个清晰度再存一份。
+            粘贴 BV 链接或 b23 短链。先解析出标题和清晰度，确认后再下载。多分P可以先选集。
           </p>
         </header>
 
@@ -135,7 +137,7 @@ function Home() {
               className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-full bg-ember px-6 text-base font-medium text-foam disabled:opacity-60"
             >
               {phase === "working" ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}
-              {phase === "working" ? "正在解析" : "解析并下载"}
+              {phase === "working" ? "正在解析" : "解析"}
             </button>
           </div>
         </form>
@@ -159,6 +161,17 @@ function Home() {
             onDownload={(formatId) => {
               setStartedId(formatId);
               triggerDownload(result.pageUrl, formatId);
+            }}
+            onPickPart={(page) => {
+              if (page === result.page) return;
+              let next = result.pageUrl;
+              try {
+                next = urlWithPart(result.pageUrl, page);
+              } catch {
+                return;
+              }
+              setUrl(next);
+              void run(next);
             }}
           />
         ) : null}
@@ -202,6 +215,7 @@ function Home() {
 
         <footer className="mt-auto pt-12 text-sm leading-relaxed text-muted">
           <p>只支持哔哩哔哩普通视频。番剧、直播，以及需要登录或大会员的清晰度下不了。</p>
+          <p className="mt-2">不用登录。同一网络每天的解析和下载有次数上限。</p>
           <p className="mt-2">请只保存你有权使用的视频。</p>
         </footer>
       </div>
@@ -229,10 +243,12 @@ function Result({
   result,
   startedId,
   onDownload,
+  onPickPart,
 }: {
   result: InspectResult;
   startedId: string | null;
   onDownload: (formatId: string) => void;
+  onPickPart: (page: number) => void;
 }) {
   const best = result.formats.find((item) => item.hasVideo && item.hasAudio) ?? result.formats[0];
   const rest = result.formats.filter((item) => item.id !== best?.id);
@@ -264,6 +280,33 @@ function Result({
           ) : null}
         </div>
       </div>
+      {result.parts.length > 1 ? (
+        <div className="border-t border-line px-5 py-4">
+          <h3 className="text-sm font-medium">分P</h3>
+          <ul className="mt-3 flex max-h-64 flex-col gap-1 overflow-auto">
+            {result.parts.map((part) => {
+              const current = part.page === result.page;
+              return (
+                <li key={part.page}>
+                  <button
+                    type="button"
+                    aria-pressed={current}
+                    onClick={() => onPickPart(part.page)}
+                    className={
+                      current
+                        ? "flex w-full items-baseline justify-between gap-3 rounded-full bg-paper px-4 py-2 text-left text-sm"
+                        : "flex w-full items-baseline justify-between gap-3 rounded-full px-4 py-2 text-left text-sm hover:bg-paper"
+                    }
+                  >
+                    <span className="line-clamp-1">{part.title}</span>
+                    <span className="shrink-0 text-muted">P{part.page}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
       {rest.length > 0 ? (
         <div className="border-t border-line px-5 py-4">
           <h3 className="text-sm font-medium">其他文件</h3>

@@ -1,15 +1,14 @@
 import { createHash } from "node:crypto";
 
-import { VideoError } from "@/lib/video/errors";
-import type { InspectResult, VideoFormat } from "@/lib/video/format";
-import { fileStem } from "@/lib/video/format";
+import { VideoError } from "./errors.ts";
+import { fileStem, type InspectResult, type VideoFormat } from "./format.ts";
 import {
   BROWSER_UA,
   assertMediaResponse,
   headerSize,
   mediaHeaders,
   safeFetch,
-} from "@/lib/video/http.server";
+} from "./http.server.ts";
 
 const MIXIN = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29,
@@ -91,16 +90,89 @@ function sign(params: Record<string, string | number>, key: string): string {
   return `${query}&w_rid=${rid}`;
 }
 
-function identity(page: URL): { bvid?: string; aid?: string } {
+export function bilibiliIdentity(page: URL): { bvid?: string; aid?: string } {
   const bvid = page.href.match(/BV[0-9A-Za-z]{10}/)?.[0];
   const aid = page.pathname.match(/\/av(\d+)/i)?.[1] ?? page.searchParams.get("aid") ?? undefined;
   return { bvid, aid };
 }
 
-async function loadView(page: URL): Promise<{ view: ViewData; cid: number; part: string | null }> {
-  const { bvid, aid } = identity(page);
-  if (!bvid && !aid) throw new VideoError("没有在链接里找到 BV 号或 av 号");
-  const query = bvid ? `bvid=${bvid}` : `aid=${aid}`;
+export function bilibiliViewQuery(id: { bvid?: string; aid?: string }): string {
+  if (!id.bvid && !id.aid) throw new VideoError("没有在链接里找到 BV 号或 av 号");
+  return id.bvid ? `bvid=${id.bvid}` : `aid=${id.aid}`;
+}
+
+export type BilibiliPartChoice = {
+  cid: number;
+  part: string | null;
+  page: number;
+  parts: { page: number; title: string }[];
+};
+
+export function selectBilibiliPart(
+  view: { cid?: number; pages?: { cid: number; page: number; part?: string }[] },
+  wantedRaw: string | null,
+): BilibiliPartChoice {
+  const wanted = Number(wantedRaw || "1");
+  const pages = view.pages ?? [];
+  const selected = pages.find((item) => item.page === wanted) ?? pages[0];
+  const cid = selected?.cid ?? view.cid;
+  if (!cid) throw new VideoError("读不到视频分片信息");
+  const parts = pages.map((item, index) => ({
+    page: item.page,
+    title: item.part?.trim() || `第 ${item.page || index + 1} P`,
+  }));
+  const page = selected?.page ?? (Number.isFinite(wanted) && wanted > 0 ? wanted : 1);
+  return {
+    cid,
+    part: pages.length > 1 ? (selected?.part?.trim() || null) : null,
+    page,
+    parts,
+  };
+}
+
+export function bilibiliUnsupportedReason(page: URL): string | null {
+  if (page.hostname.includes("live.bilibili.com")) {
+    return "直播间没有可保存的完整视频文件";
+  }
+  if (page.pathname.includes("/bangumi/")) {
+    return "番剧页面通常有地区或登录限制，这里拿不到视频文件";
+  }
+  return null;
+}
+
+export function qualityFromFormatId(formatId: string): number {
+  const quality = Number(formatId.split(":")[1] || "80");
+  return Number.isFinite(quality) ? quality : 80;
+}
+
+export function formatsFromPlayResponses(
+  settled: Array<{ quality?: number; durl?: { size?: number }[] } | null>,
+): VideoFormat[] {
+  const formats: VideoFormat[] = [];
+  const seen = new Set<string>();
+  for (const data of settled) {
+    if (!data?.durl?.[0]) continue;
+    const quality = data.quality ?? 0;
+    const size = data.durl.reduce((sum, partUrl) => sum + (partUrl.size || 0), 0);
+    const key = `${quality}:${size}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    formats.push({
+      id: `bili:${quality}`,
+      label: QN_LABEL[quality] ?? `${quality}P`,
+      ext: "mp4",
+      size: size || null,
+      hasAudio: true,
+      hasVideo: true,
+    });
+  }
+  return formats;
+}
+
+async function loadView(
+  page: URL,
+): Promise<{ view: ViewData; cid: number; part: string | null; page: number; parts: { page: number; title: string }[] }> {
+  const query = bilibiliViewQuery(bilibiliIdentity(page));
   const response = await safeFetch(`https://api.bilibili.com/x/web-interface/view?${query}`, {
     headers: API_HEADERS,
   });
@@ -108,16 +180,12 @@ async function loadView(page: URL): Promise<{ view: ViewData; cid: number; part:
   if (json.code !== 0 || !json.data) {
     throw new VideoError(json.message || "读不到这个哔哩哔哩视频");
   }
-  const wanted = Number(page.searchParams.get("p") || "1");
-  const pages = json.data.pages ?? [];
-  const part = pages.find((item) => item.page === wanted) ?? pages[0];
-  const cid = part?.cid ?? json.data.cid;
-  if (!cid) throw new VideoError("读不到视频分片信息");
-  return { view: json.data, cid, part: pages.length > 1 ? (part?.part ?? null) : null };
+  const selected = selectBilibiliPart(json.data, page.searchParams.get("p"));
+  return { view: json.data, ...selected };
 }
 
 async function playurl(page: URL, cid: number, qn: number): Promise<PlayData> {
-  const { bvid, aid } = identity(page);
+  const { bvid, aid } = bilibiliIdentity(page);
   const key = await wbiKey();
   const params: Record<string, string | number> = {
     cid,
@@ -164,13 +232,9 @@ async function openCandidate(urls: string[], referer: string): Promise<Response>
 }
 
 export async function inspectBilibili(page: URL): Promise<InspectResult> {
-  if (page.hostname.includes("live.bilibili.com")) {
-    throw new VideoError("直播间没有可保存的完整视频文件");
-  }
-  if (page.pathname.includes("/bangumi/")) {
-    throw new VideoError("番剧页面通常有地区或登录限制，这里拿不到视频文件");
-  }
-  const { view, cid, part } = await loadView(page);
+  const unsupported = bilibiliUnsupportedReason(page);
+  if (unsupported) throw new VideoError(unsupported);
+  const { view, cid, part, page: pageNo, parts } = await loadView(page);
   const asks = [80, 64, 32, 16];
   const settled = await Promise.all(
     asks.map(async (qn) => {
@@ -181,24 +245,7 @@ export async function inspectBilibili(page: URL): Promise<InspectResult> {
       }
     }),
   );
-  const formats: VideoFormat[] = [];
-  const seen = new Set<string>();
-  for (const data of settled) {
-    if (!data?.durl?.[0]) continue;
-    const quality = data.quality ?? 0;
-    const size = data.durl.reduce((sum, partUrl) => sum + (partUrl.size || 0), 0);
-    const key = `${quality}:${size}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    formats.push({
-      id: `bili:${quality}`,
-      label: QN_LABEL[quality] ?? `${quality}P`,
-      ext: "mp4",
-      size: size || null,
-      hasAudio: true,
-      hasVideo: true,
-    });
-  }
+  const formats = formatsFromPlayResponses(settled);
   if (formats.length === 0) throw new VideoError("这个哔哩哔哩视频没有公开的视频文件");
   const title = part ? `${view.title ?? "哔哩哔哩视频"} · ${part}` : (view.title ?? "哔哩哔哩视频");
   return {
@@ -209,6 +256,8 @@ export async function inspectBilibili(page: URL): Promise<InspectResult> {
     source: "哔哩哔哩",
     pageUrl: page.toString(),
     formats,
+    parts,
+    page: pageNo,
   };
 }
 
@@ -216,9 +265,11 @@ export async function openBilibili(
   page: URL,
   formatId: string,
 ): Promise<{ filename: string; contentType: string; size: number | null; body: ReadableStream<Uint8Array> }> {
-  const quality = Number(formatId.split(":")[1] || "80");
+  const unsupported = bilibiliUnsupportedReason(page);
+  if (unsupported) throw new VideoError(unsupported);
+  const quality = qualityFromFormatId(formatId);
   const { view, cid, part } = await loadView(page);
-  const data = await playurl(page, cid, Number.isFinite(quality) ? quality : 80);
+  const data = await playurl(page, cid, quality);
   const parts = data.durl ?? [];
   const groups = parts.map(partCandidates).filter((urls) => urls.length > 0);
   if (groups.length === 0) throw new VideoError("没有可下载的视频地址");

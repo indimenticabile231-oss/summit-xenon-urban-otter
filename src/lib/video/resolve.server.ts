@@ -1,7 +1,7 @@
-import { inspectBilibili, openBilibili } from "@/lib/video/bilibili.server";
-import { VideoError } from "@/lib/video/errors";
-import type { InspectResult } from "@/lib/video/format";
-import { BROWSER_UA, assertPublicHttpUrl, normalizeInput, safeFetch } from "@/lib/video/http.server";
+import { inspectBilibili, openBilibili } from "./bilibili.server.ts";
+import { VideoError } from "./errors.ts";
+import type { InspectResult } from "./format.ts";
+import { BROWSER_UA, assertPublicHttpUrl, normalizeInput, safeFetch } from "./http.server.ts";
 
 type Opened = {
   filename: string;
@@ -30,6 +30,21 @@ function isBilibili(page: URL): boolean {
   return host === "b23.tv" || host === "bilibili.com" || host.endsWith(".bilibili.com");
 }
 
+export type VideoHostKind = "bilibili" | "youtube" | "other";
+
+export function videoHostKind(page: URL): VideoHostKind {
+  if (isYouTube(page)) return "youtube";
+  if (isBilibili(page)) return "bilibili";
+  return "other";
+}
+
+/** 非哔哩哔哩页面的拒绝文案。哔哩哔哩返回 null，继续解析。 */
+export function unsupportedPageMessage(page: URL): string | null {
+  if (isYouTube(page)) return "目前只支持哔哩哔哩";
+  if (!isBilibili(page)) return "目前只支持哔哩哔哩视频详情页";
+  return null;
+}
+
 function alreadyConcrete(page: URL): boolean {
   return (
     isBilibili(page) && (/BV[0-9A-Za-z]{10}/.test(page.href) || /\/av\d+/i.test(page.pathname))
@@ -51,8 +66,8 @@ async function settlePage(raw: string): Promise<URL> {
 }
 
 async function inspectPage(page: URL): Promise<InspectResult> {
-  if (isYouTube(page)) throw new VideoError("目前只支持哔哩哔哩");
-  if (!isBilibili(page)) throw new VideoError("目前只支持哔哩哔哩视频详情页");
+  const blocked = unsupportedPageMessage(page);
+  if (blocked) throw new VideoError(blocked);
   try {
     return await inspectBilibili(page);
   } catch (error) {
@@ -63,8 +78,8 @@ async function inspectPage(page: URL): Promise<InspectResult> {
 }
 
 async function openPage(page: URL, formatId: string): Promise<Opened> {
-  if (isYouTube(page)) throw new VideoError("目前只支持哔哩哔哩");
-  if (!isBilibili(page)) throw new VideoError("目前只支持哔哩哔哩视频详情页");
+  const blocked = unsupportedPageMessage(page);
+  if (blocked) throw new VideoError(blocked);
   try {
     return await openBilibili(page, formatId);
   } catch (error) {
