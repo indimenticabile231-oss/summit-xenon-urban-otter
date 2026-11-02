@@ -1,8 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { VideoError } from "@/lib/video/errors";
+import { takeRequestQuota } from "@/lib/video/quota.server";
 import { inspectUrl } from "@/lib/video/resolve.server";
 
+// 不看登录态。额度按 IP 计，避免把解析接口当公开代理。见 quota.server.ts。
 export const Route = createFileRoute("/api/inspect")({
   server: {
     handlers: {
@@ -16,6 +18,19 @@ export const Route = createFileRoute("/api/inspect")({
         }
         if (!url.trim()) return Response.json({ error: "请先粘贴视频页面链接" }, { status: 400 });
         if (url.length > 4000) return Response.json({ error: "链接太长了" }, { status: 400 });
+        const quota = takeRequestQuota(request, "inspect");
+        if (quota.denial) {
+          return Response.json(
+            { error: quota.denial.message },
+            {
+              status: 429,
+              headers: {
+                "Retry-After": String(quota.denial.retryAfterSec),
+                "Cache-Control": "no-store",
+              },
+            },
+          );
+        }
         try {
           const result = await withTimeout(inspectUrl(url), 40_000);
           return Response.json(result);
